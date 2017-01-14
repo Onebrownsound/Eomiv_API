@@ -35,3 +35,16 @@ class Transaction(Base):
 
     def __repr__(self):
         return 'This is a {} owned by {} for video {}'.format(self.action_type, self.owner, self.video_id)
+
+
+class Video(Base):
+    __tablename__ = 'videos'
+    id = Column(Integer, primary_key=True)
+    watch_count = Column(Integer, default=0)
+
+    def __init__(self, id=None, watch_count=None):
+        self.id = id
+        self.watch_count = watch_count
+
+    def __repr__(self):
+        return 'Video id {} Watch count {}'.format(self.id, self.watch_count)

@@ -6,7 +6,7 @@ import datetime
 from flask import Flask, jsonify, request
 
 from database import db_session as db
-from models import User, Transaction
+from models import User, Transaction, Video
 
 app = Flask(__name__)
 
@@ -42,6 +42,7 @@ def transaction(action_type=None, user_id=None, timestamp=None, video_id=None):
 
 def process_data():
     """
+    Helper function which I utilized to create the data store.
     Open file->read lines-> dump into DB
     Divided operations into two camps Register and Tranaction.
     Registering adds an entry to User table.
@@ -53,7 +54,7 @@ def process_data():
         content = f.read().split('\n')
         for line in content:
 
-            # swingfield takes a dual roll for REGISTER operations it is the country and for all others
+            # swing_field takes a dual roll for REGISTER operations it is the country and for all others
             # it assumes the role of video_id.
             split = line.split(' ')
             split_length = len(split)
@@ -76,7 +77,22 @@ def process_data():
                 raise TypeError  # Or some error which specifies an invalid OPERATOR has been found
 
 
-@app.route('/user/<int:user_id>')
+def pre_compute_watches():
+    """
+    Helper function which pre-computes Video watches based off data in Transaction Table.
+    Was used to setup the Videos table with pre-computed watch counts.
+    """
+    video_frequency = defaultdict(int)
+    watched_videos = Transaction.query.filter_by(action_type='WATCH')
+    for video in watched_videos:
+        video_frequency[video.video_id] += 1
+    for video_id, watch_count in video_frequency.items():
+        entry = Video(id=video_id, watch_count=watch_count)
+        db.add(entry)
+        db.commit()
+
+
+@app.route('/user/<int:user_id>', methods=['GET', 'POST', 'PATCH', 'DELETE'])
 def get_user_info(user_id=None):
     """
     API end-point for the user. Requires <user_id> parameter. Supports GET POST PATCH and DELETE
@@ -89,6 +105,7 @@ def get_user_info(user_id=None):
         watched_videos = Transaction.query.filter_by(owner=user.id, action_type='WATCH').all()
         liked_videos = Transaction.query.filter_by(owner=user.id, action_type='LIKE').all()
         return jsonify({'user_id': user_id,
+                        'country': user.country,
                         'uploaded_videos': [video.video_id for video in uploaded_videos],
                         'watched_videos': [video.video_id for video in watched_videos],
                         'liked_videos': [video.video_id for video in liked_videos]})
@@ -98,7 +115,7 @@ def get_user_info(user_id=None):
                  timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                  country=request.args.get('country'),
                  ip=request.args.get('ip'))
-
+        return jsonify({'status': 'OK', 'user_id': user_id, 'operation': 'POST/CREATE'})
 
     elif request.method == 'PATCH':
         # ATM these are the only columns I believe should be mutable in the USER table.
@@ -108,9 +125,9 @@ def get_user_info(user_id=None):
         return jsonify({'status': 'OK', 'user_id': user_id, 'operation': 'UPDATE/PATCH'})
 
     elif request.method == 'DELETE':
-        user = User.query.filter(id=user_id).first()
-        db.session.delete(user)
-        db.session.commit()
+        user = User.query.filter_by(id=user_id).first()
+        db.delete(user)
+        db.commit()
         return jsonify({'status': 'OK', 'user_id': user_id, 'operation': 'DELETE'})
 
 
@@ -141,12 +158,25 @@ def get_users_by_country(country_name=None):
 
 
 @app.route('/trending', methods=['GET'])
-def top_five_videos():
+def top_five_precomputed():
     """
-    This endpoint calculates and returns the top 5 most watched videos.
+    A much better solution to the top 5 video problem. Utilizes the Video table to do a quick lookup on the top 5 watched
+    videos. Could be used in conjunction with another service which collects pings issued from the Vimeo player, and updates
+    the watch count in near real time.
+    """
+    top_five_videos = db.query(Video).order_by(Video.watch_count.desc()).limit(5).all()
+    top_five_videos = [{'video_id': video.id, 'watched': video.watch_count} for video in top_five_videos]
+    return jsonify(top_five_videos)
+
+
+@app.route('/trending-live', methods=['GET'])
+def top_five_live():
+    """
+    This endpoint calculates and returns the top 5 most watched videos IN REAL TIME.
     This is not good. Probably should have a real time mechanic which adds/counts video views over a particular time
     slice maintaining the top 5 in real time. Much more efficient than what is below
-    O(M + NLOG(N) where M is the DB query cost and N is the size of video_frequency dictionary"""
+    O(M + N LOG(N) where M is the number of elements in Transaction table and N is the number of videos"""
+
     video_frequency = defaultdict(int)
     watched_videos = Transaction.query.filter_by(action_type='WATCH')
     for video in watched_videos:

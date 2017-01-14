@@ -11,5 +11,5 @@ Base.query = db_session.query_property()
 
 
 def init_db():
-    from models import User, Transaction
+    from models import User, Transaction, Video
     Base.metadata.create_all(bind=engine)
